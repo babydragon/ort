@@ -10,13 +10,15 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct OpenVINOExecutionProvider {
 	device_type: Option<CString>,
-	device_id: Option<CString>,
+	precision: Option<CString>,
+	device_id: Option<CString>,	// not use in v2
 	num_threads: usize,
+	num_streams: usize,
 	cache_dir: Option<CString>,
 	context: *mut c_void,
 	enable_opencl_throttling: bool,
 	enable_dynamic_shapes: bool,
-	enable_npu_fast_compile: bool
+	enable_npu_fast_compile: bool	// not use in v2
 }
 
 unsafe impl Send for OpenVINOExecutionProvider {}
@@ -26,8 +28,10 @@ impl Default for OpenVINOExecutionProvider {
 	fn default() -> Self {
 		Self {
 			device_type: None,
+			precision: None,
 			device_id: None,
 			num_threads: 8,
+			num_streams: 1,
 			cache_dir: None,
 			context: ptr::null_mut(),
 			enable_opencl_throttling: false,
@@ -46,6 +50,12 @@ impl OpenVINOExecutionProvider {
 		self
 	}
 
+	#[must_use]
+	pub fn with_precision(mut self, precision: impl AsRef<str>) -> Self {
+		self.precision = Some(CString::new(precision.as_ref()).expect("invalid string"));
+		self
+	}
+
 	/// Selects a particular hardware device for inference. If this option is not explicitly set, an arbitrary free
 	/// device will be automatically selected by OpenVINO runtime.
 	#[must_use]
@@ -59,6 +69,12 @@ impl OpenVINOExecutionProvider {
 	#[must_use]
 	pub fn with_num_threads(mut self, num_threads: usize) -> Self {
 		self.num_threads = num_threads;
+		self
+	}
+
+	#[must_use]
+	pub fn with_num_streams(mut self, num_streams: usize) -> Self {
+		self.num_streams = num_streams;
 		self
 	}
 
@@ -131,7 +147,7 @@ impl ExecutionProvider for OpenVINOExecutionProvider {
 
 			// Like TensorRT, the OpenVINO EP is also pretty picky about needing an environment by this point.
 			let _ = crate::environment::get_environment();
-
+/*
 			let openvino_options = ort_sys::OrtOpenVINOProviderOptions {
 				device_type: self
 					.device_type
@@ -145,7 +161,68 @@ impl ExecutionProvider for OpenVINOExecutionProvider {
 				enable_dynamic_shapes: self.enable_dynamic_shapes.into(),
 				enable_npu_fast_compile: self.enable_npu_fast_compile.into()
 			};
-			crate::ortsys![unsafe SessionOptionsAppendExecutionProvider_OpenVINO(session_builder.ptr_mut(), ptr::addr_of!(openvino_options))?];
+			*/
+
+			// use ort_sys::OrtOpenVINOProviderOptionsV2;
+
+			let mut key_array: Vec<CString> = Vec::new();
+			let mut value_array: Vec<CString> = Vec::new();
+			if let Some(device_type) = &self.device_type {
+				key_array.push(CString::new("device_type")?);
+				value_array.push(device_type.clone());
+			}
+
+			if let Some(precision) = &self.precision {
+				key_array.push(CString::new("precision")?);
+				value_array.push(precision.clone());
+			}
+
+			key_array.push(CString::new("num_of_threads")?);
+			value_array.push(CString::new(format!("{}", self.num_threads))?);
+
+			key_array.push(CString::new("num_streams")?);
+			value_array.push(CString::new(format!("{}", self.num_streams))?);
+
+			if let Some(cache_dir) = &self.cache_dir {
+				key_array.push(CString::new("cache_dir")?);
+				value_array.push(cache_dir.clone());
+			}
+
+			if self.context != ptr::null_mut() {
+				key_array.push(CString::new("context")?);
+				value_array.push(CString::new(format!("{:p}", self.context))?);
+			}
+
+			if self.enable_opencl_throttling {
+				key_array.push(CString::new("enable_opencl_throttling")?);
+				value_array.push(CString::new("true")?);
+			} else {
+				key_array.push(CString::new("enable_opencl_throttling")?);
+				value_array.push(CString::new("false")?);
+			}
+
+			if self.enable_dynamic_shapes {
+				key_array.push(CString::new("disable_dynamic_shapes")?);
+				value_array.push(CString::new("false")?);
+			} else {
+				key_array.push(CString::new("disable_dynamic_shapes")?);
+				value_array.push(CString::new("true")?);
+			}
+
+			let param_size = key_array.len();
+			let key_ptr_array = key_array
+				.iter()
+				.map(|x| x.as_ptr())
+				.collect::<Vec<_>>();
+			let key_ptr = key_ptr_array.as_ptr();
+			let value_ptr_array = value_array
+				.iter()
+				.map(|x| x.as_ptr())
+				.collect::<Vec<_>>();
+			let value_ptr = value_ptr_array.as_ptr();
+
+			// crate::ortsys![unsafe SessionOptionsAppendExecutionProvider_OpenVINO(session_builder.ptr_mut(), ptr::addr_of!(openvino_options))?];
+			crate::ortsys![unsafe SessionOptionsAppendExecutionProvider_OpenVINO_V2(session_builder.ptr_mut(), key_ptr, value_ptr, param_size)?];
 			return Ok(());
 		}
 
